@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+
+# Virtual environments
+.venv/
+venv/
+
+# IDE
+.idea/
+.vscode/
+
+# Local env/config
+.env
+.env.*
+!.env.example
+
+# Local runtime/cache artifacts
+.botads-media-cache.json
+examples/.botads-media-cache.json
+
+# OS
+.DS_Store
