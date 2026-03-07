@@ -17,12 +17,14 @@ async def main() -> None:
     action = await ads.send_action_advert(
         recipient_telegram_id=100000001,
         placement="after_result",
+        language="uk",
     )
     print(action)
 
     broadcast = await ads.send_broadcast_advert(
         recipient_telegram_ids=[100000001, 100000002],
         placement="daily_digest",
+        language="en",
     )
     print(broadcast)
 

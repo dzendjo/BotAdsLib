@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 from pathlib import Path
 from typing import Any, Iterable, Sequence
 
@@ -120,15 +121,23 @@ class BotAdsClient:
         *,
         recipient_telegram_id: int | str,
         placement: str,
+        language: str | None = None,
     ) -> AdItem | None:
         await self.ensure_configuration()
         recipient = str(recipient_telegram_id)
+        language_code = self._normalize_language_code(language)
         payload = {
             "deliveryType": "action",
             "recipientTelegramId": recipient,
             "placement": placement,
         }
-        response = await self._fetch_next_ad(payload=payload, delivery_type="action")
+        if language_code:
+            payload["language"] = language_code
+        response = await self._fetch_next_ad(
+            payload=payload,
+            delivery_type="action",
+            language=language_code,
+        )
         item_data = response.get("item") if isinstance(response, dict) else None
         if not item_data:
             return None
@@ -139,9 +148,11 @@ class BotAdsClient:
         *,
         recipient_telegram_ids: Sequence[int | str],
         placement: str,
+        language: str | None = None,
     ) -> tuple[AdItem | None, list[str]]:
         await self.ensure_configuration()
         recipients = self._normalize_recipient_ids(recipient_telegram_ids)
+        language_code = self._normalize_language_code(language)
         if not recipients:
             raise ValueError("recipient_telegram_ids must contain at least one ID")
         if len(recipients) > 100:
@@ -152,7 +163,13 @@ class BotAdsClient:
             "recipientTelegramIds": recipients,
             "placement": placement,
         }
-        response = await self._fetch_next_ad(payload=payload, delivery_type="broadcast")
+        if language_code:
+            payload["language"] = language_code
+        response = await self._fetch_next_ad(
+            payload=payload,
+            delivery_type="broadcast",
+            language=language_code,
+        )
         item_data = response.get("item") if isinstance(response, dict) else None
         if not item_data:
             return None, recipients
@@ -192,16 +209,65 @@ class BotAdsClient:
             return int(value)
         return value
 
+    @classmethod
+    def segment_broadcast_recipients_by_language(
+        cls,
+        *,
+        recipients: Sequence[tuple[int | str, str | None]],
+        fallback_language: str = "en",
+        max_chunk_size: int = 100,
+    ) -> list[tuple[str, list[str]]]:
+        """
+        Group recipients by base language and split each group into API-safe chunks.
+
+        Returns list of ``(language, recipient_ids_chunk)`` pairs where each chunk size
+        is at most ``max_chunk_size`` (and never more than 100, per API contract).
+        """
+        if max_chunk_size < 1:
+            raise ValueError("max_chunk_size must be greater than 0")
+        if max_chunk_size > 100:
+            raise ValueError("max_chunk_size cannot be greater than 100")
+
+        normalized_fallback = cls._normalize_language_code(fallback_language)
+        assert normalized_fallback is not None
+
+        grouped: dict[str, list[str]] = {}
+        seen_recipients: set[str] = set()
+
+        for recipient, raw_language in recipients:
+            recipient_id = str(recipient)
+            if recipient_id in seen_recipients:
+                continue
+            seen_recipients.add(recipient_id)
+
+            language = normalized_fallback
+            if raw_language:
+                base_language = raw_language.strip().lower().replace("_", "-").split("-", 1)[0]
+                try:
+                    language = cls._normalize_language_code(base_language) or normalized_fallback
+                except ValueError:
+                    language = normalized_fallback
+
+            grouped.setdefault(language, []).append(recipient_id)
+
+        chunks: list[tuple[str, list[str]]] = []
+        for language, ids in grouped.items():
+            for start in range(0, len(ids), max_chunk_size):
+                chunks.append((language, ids[start:start + max_chunk_size]))
+        return chunks
+
     async def send_action_advert(
         self,
         *,
         recipient_telegram_id: int | str,
         placement: str,
+        language: str | None = None,
     ) -> ActionAdvertResult:
         recipient = str(recipient_telegram_id)
         ad_item = await self.get_action_ad(
             recipient_telegram_id=recipient,
             placement=placement,
+            language=language,
         )
         if not ad_item:
             return ActionAdvertResult(has_ad=False, recipient_telegram_id=recipient)
@@ -230,11 +296,13 @@ class BotAdsClient:
         *,
         recipient_telegram_ids: Sequence[int | str],
         placement: str,
+        language: str | None = None,
         concurrency: int | None = None,
     ) -> BroadcastAdvertResult:
         ad_item, recipients = await self.get_broadcast_ad(
             recipient_telegram_ids=recipient_telegram_ids,
             placement=placement,
+            language=language,
         )
         if not ad_item:
             return BroadcastAdvertResult(has_ad=False, recipient_telegram_ids=recipients)
@@ -376,13 +444,19 @@ class BotAdsClient:
         *,
         payload: dict[str, Any],
         delivery_type: str,
+        language: str | None = None,
     ) -> dict[str, Any]:
         headers = {"x-ad-delivery-type": delivery_type}
+        params = {"deliveryType": delivery_type}
+        if language:
+            headers["x-ad-language"] = language
+            params["language"] = language
         return await self._request_json(
             method="POST",
             path="/api/ads/next",
             json_payload=payload,
             headers=headers,
+            params=params,
             timeout_seconds=self.next_timeout_seconds,
         )
 
@@ -777,6 +851,18 @@ class BotAdsClient:
             "gif": "animation",
         }
         return mapping.get(lowered, lowered)
+
+    @staticmethod
+    def _normalize_language_code(language: str | None) -> str | None:
+        if language is None:
+            return None
+
+        normalized = language.strip().lower()
+        if not normalized:
+            return None
+        if not re.fullmatch(r"[a-z]{2}", normalized):
+            raise ValueError("language must be a 2-letter code, for example 'uk' or 'en'")
+        return normalized
 
     def _load_media_cache(self) -> None:
         if not self.media_cache_path or not self.media_cache_path.exists():

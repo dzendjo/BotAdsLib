@@ -5,8 +5,9 @@ Library for showing ads in Telegram bots built on `aiogram`, integrated with Bot
 ## Features
 
 - fetches the next ad via `POST /api/ads/next`;
+- supports ad localization (`language`) for `action` and `broadcast`;
 - sends `action` ads to a single user;
-- sends `broadcast` ads to a list of users;
+- sends `broadcast` ads to a list of users (up to 100 recipients per batch);
 - automatically submits broadcast results to `POST /api/ads/impressions/batch`;
 - caches media through a service channel (`cache_channel_id`) and reuses `file_id`.
 
@@ -46,13 +47,17 @@ async def main() -> None:
     action_result = await ads.send_action_advert(
         recipient_telegram_id=100000001,
         placement="after_result",
+        language="uk",
     )
+    # API may fallback to base creative if locale is unavailable:
+    print(action_result.ad_item.language if action_result.ad_item else None)
     print(action_result)
 
     # BROADCAST (up to 100 IDs)
     broadcast_result = await ads.send_broadcast_advert(
         recipient_telegram_ids=[100000001, 100000002, 100000003],
         placement="daily_digest",
+        language="en",
     )
     print(broadcast_result)
 
@@ -92,6 +97,45 @@ that the bot is admin in the cache channel.
 4. Builds `delivered_recipient_ids` and `failed_recipient_ids`.
 5. Automatically calls `POST /api/ads/impressions/batch`.
 6. If batch submit fails, raises `BroadcastBatchSubmitError` (so you can retry).
+7. If API returns `409 Previous broadcast batch is pending`, wait for the previous
+   batch to complete (or expire) before requesting a new one.
+
+## Language Support
+
+- `get_action_ad(...)`, `send_action_advert(...)`, `get_broadcast_ad(...)`,
+  `send_broadcast_advert(...)` accept optional `language="uk" | "en" | ...`;
+- language is sent in body + `x-ad-language` header + `language` query parameter;
+- use only 2-letter codes (e.g. `uk`, `en`, `pl`);
+- check `ad_item.language` to see which localization API actually returned
+  (`None` means base creative fallback).
+
+## Recommended Broadcast Strategy for Multi-language Audiences
+
+1. Group recipients by base Telegram language (`language_code[:2]`).
+2. Split each language group into chunks of max 100 users.
+3. Call `send_broadcast_advert(..., language=<group_language>)` chunk by chunk.
+4. Do not request a new chunk while previous batch is pending for the same bot.
+
+Library helper:
+
+```python
+recipient_chunks = BotAdsClient.segment_broadcast_recipients_by_language(
+    recipients=[
+        (100000001, "uk"),
+        (100000002, "uk"),
+        (100000003, "en-US"),
+    ],
+    fallback_language="en",
+    max_chunk_size=100,
+)
+
+for language, chunk in recipient_chunks:
+    await ads.send_broadcast_advert(
+        recipient_telegram_ids=chunk,
+        placement="daily_digest",
+        language=language,
+    )
+```
 
 ## Click Tracking
 
@@ -112,6 +156,7 @@ What it does:
   - checks if a broadcast ad is available;
   - if not, replies `No available campaigns for your bot...`;
   - if yes, sends ad preview and shows campaign parameters (`Campaign`, `Price`, `Planned recipients`);
+  - requests ad with user's base Telegram language and shows requested/applied locale;
   - shows inline button `Start broadcast`;
   - asks for final confirmation via reply keyboard (`Yes` / `No`);
   - uses 2 recipients: command author + fake ID (expected 1 success and 1 fail);

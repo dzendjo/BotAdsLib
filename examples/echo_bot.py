@@ -235,6 +235,16 @@ def _format_price(value: Any) -> str:
     return str(value)
 
 
+def _telegram_base_language(language_code: str | None, *, default: str = "en") -> str:
+    if not language_code:
+        return default
+    normalized = language_code.strip().lower().replace("_", "-")
+    base = normalized.split("-", 1)[0]
+    if len(base) == 2 and base.isalpha():
+        return base
+    return default
+
+
 def _extract_campaign_name(ad_item: AdItem) -> str:
     raw = ad_item.raw
     value = _pick_first(
@@ -429,11 +439,13 @@ async def handle_broadcast(message: Message, bot: Bot) -> None:
 
     ads = get_ads_client()
     recipients = [message.from_user.id, FAKE_BROADCAST_RECIPIENT_ID]
+    request_language = _telegram_base_language(message.from_user.language_code)
 
     try:
         ad_item, normalized_recipients = await ads.get_broadcast_ad(
             recipient_telegram_ids=recipients,
             placement=BROADCAST_PLACEMENT,
+            language=request_language,
         )
     except BotAdsError as exc:
         await notify_admin(bot, context="Broadcast ad request failed", error=exc)
@@ -462,6 +474,8 @@ async def handle_broadcast(message: Message, bot: Bot) -> None:
         f"Campaign: {_extract_campaign_name(ad_item)}\n"
         f"Price: {_extract_campaign_price(ad_item)}\n"
         f"Planned recipients: {_extract_planned_count(ad_item)}\n"
+        f"Requested language: {request_language}\n"
+        f"Applied language: {ad_item.language or 'base'}\n"
         "Press the button to continue.",
         reply_markup=_build_start_keyboard(),
     )
@@ -522,10 +536,12 @@ async def handle_echo_with_action_ad(message: Message, bot: Bot) -> None:
     await message.answer(message.text)
 
     ads = get_ads_client()
+    request_language = _telegram_base_language(message.from_user.language_code)
     try:
         result = await ads.send_action_advert(
             recipient_telegram_id=message.from_user.id,
             placement=ACTION_PLACEMENT,
+            language=request_language,
         )
     except BotAdsError as exc:
         await notify_admin(bot, context="Action ad request failed", error=exc)

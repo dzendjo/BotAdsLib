@@ -91,6 +91,7 @@ class BroadcastBatch:
 class AdItem:
     campaign_id: str
     ad_id: str
+    language: str | None
     click_url: str
     creative: Creative
     broadcast_batch: BroadcastBatch | None = None
@@ -98,9 +99,11 @@ class AdItem:
 
     @classmethod
     def from_api(cls, data: dict[str, Any]) -> "AdItem":
+        language = data.get("language")
         return cls(
             campaign_id=str(data.get("campaignId") or ""),
             ad_id=str(data.get("adId") or ""),
+            language=str(language) if language else None,
             click_url=str(data.get("clickUrl") or ""),
             creative=Creative.from_api(data.get("creative") or {}),
             broadcast_batch=BroadcastBatch.from_api(data.get("broadcastBatch")),
