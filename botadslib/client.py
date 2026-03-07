@@ -600,20 +600,33 @@ class BotAdsClient:
         reply_markup = self._parse_reply_markup(creative.reply_markup)
 
         if creative.content_type == "text":
+            text = creative.text or ""
+            entities = self._parse_entities(creative.entities, text=text)
             message = await self.bot.send_message(
                 chat_id=chat_id,
-                text=creative.text or "",
-                entities=self._parse_entities(creative.entities),
+                text=text,
+                entities=entities,
+                parse_mode=None,
                 reply_markup=reply_markup,
             )
             return message, False
 
         media_type, storage_url = self._resolve_media(creative)
         if not media_type or not storage_url:
+            fallback_text = creative.text
+            fallback_entities = creative.entities
+            if not fallback_text:
+                fallback_text = creative.caption or ""
+                fallback_entities = creative.caption_entities
+            parsed_fallback_entities = self._parse_entities(
+                fallback_entities,
+                text=fallback_text or "",
+            )
             fallback_message = await self.bot.send_message(
                 chat_id=chat_id,
-                text=creative.text or creative.caption or "",
-                entities=self._parse_entities(creative.entities),
+                text=fallback_text or "",
+                entities=parsed_fallback_entities,
+                parse_mode=None,
                 reply_markup=reply_markup,
             )
             return fallback_message, False
@@ -623,14 +636,40 @@ class BotAdsClient:
             storage_url=storage_url,
         )
 
-        message = await self._send_media(
-            chat_id=chat_id,
-            media_type=media_type,
-            media=file_id,
-            caption=creative.caption,
-            caption_entities=self._parse_entities(creative.caption_entities),
-            reply_markup=reply_markup,
+        caption_text = creative.caption or ""
+        caption_entities = self._parse_entities(
+            creative.caption_entities,
+            text=caption_text,
         )
+        try:
+            message = await self._send_media(
+                chat_id=chat_id,
+                media_type=media_type,
+                media=file_id,
+                caption=creative.caption,
+                caption_entities=caption_entities,
+                reply_markup=reply_markup,
+            )
+        except TelegramAPIError as exc:
+            if not self._is_entity_parse_error(exc):
+                raise
+
+            utf16_caption_entities = self._parse_entities(
+                creative.caption_entities,
+                text=caption_text,
+                assume_codepoint_offsets=True,
+            )
+            if not utf16_caption_entities:
+                raise
+
+            message = await self._send_media(
+                chat_id=chat_id,
+                media_type=media_type,
+                media=file_id,
+                caption=creative.caption,
+                caption_entities=utf16_caption_entities,
+                reply_markup=reply_markup,
+            )
         return message, from_existing_cache
 
     def _resolve_media(self, creative: Any) -> tuple[str | None, str | None]:
@@ -703,6 +742,7 @@ class BotAdsClient:
                 photo=media,
                 caption=caption,
                 caption_entities=caption_entities,
+                parse_mode=None,
                 reply_markup=reply_markup,
             )
         if media_type == "video":
@@ -711,6 +751,7 @@ class BotAdsClient:
                 video=media,
                 caption=caption,
                 caption_entities=caption_entities,
+                parse_mode=None,
                 reply_markup=reply_markup,
             )
         if media_type == "audio":
@@ -719,6 +760,7 @@ class BotAdsClient:
                 audio=media,
                 caption=caption,
                 caption_entities=caption_entities,
+                parse_mode=None,
                 reply_markup=reply_markup,
             )
         if media_type == "document":
@@ -727,6 +769,7 @@ class BotAdsClient:
                 document=media,
                 caption=caption,
                 caption_entities=caption_entities,
+                parse_mode=None,
                 reply_markup=reply_markup,
             )
         if media_type == "animation":
@@ -735,6 +778,7 @@ class BotAdsClient:
                 animation=media,
                 caption=caption,
                 caption_entities=caption_entities,
+                parse_mode=None,
                 reply_markup=reply_markup,
             )
         if media_type == "voice":
@@ -743,6 +787,7 @@ class BotAdsClient:
                 voice=media,
                 caption=caption,
                 caption_entities=caption_entities,
+                parse_mode=None,
                 reply_markup=reply_markup,
             )
         if media_type == "video_note":
@@ -764,6 +809,7 @@ class BotAdsClient:
             document=media,
             caption=caption,
             caption_entities=caption_entities,
+            parse_mode=None,
             reply_markup=reply_markup,
         )
 
@@ -806,11 +852,24 @@ class BotAdsClient:
         raise BotAdsError("Cannot extract file_id from cache channel message")
 
     @staticmethod
-    def _parse_entities(raw_entities: Iterable[dict[str, Any]]) -> list[MessageEntity] | None:
+    def _parse_entities(
+        raw_entities: Iterable[dict[str, Any]],
+        *,
+        text: str = "",
+        assume_codepoint_offsets: bool = False,
+    ) -> list[MessageEntity] | None:
         parsed: list[MessageEntity] = []
         for entity in raw_entities:
+            if not isinstance(entity, dict):
+                continue
+            normalized_entity = BotAdsClient._normalize_message_entity(entity)
+            if assume_codepoint_offsets:
+                normalized_entity = BotAdsClient._convert_entity_offsets_to_utf16(
+                    normalized_entity,
+                    text=text,
+                )
             try:
-                parsed.append(MessageEntity.model_validate(entity))
+                parsed.append(MessageEntity.model_validate(normalized_entity))
             except Exception:  # noqa: BLE001
                 continue
         return parsed or None
@@ -820,7 +879,8 @@ class BotAdsClient:
         if not raw_reply_markup:
             return None
         try:
-            return InlineKeyboardMarkup.model_validate(raw_reply_markup)
+            normalized = BotAdsClient._normalize_reply_markup(raw_reply_markup)
+            return InlineKeyboardMarkup.model_validate(normalized)
         except Exception:  # noqa: BLE001
             return None
 
@@ -851,6 +911,126 @@ class BotAdsClient:
             "gif": "animation",
         }
         return mapping.get(lowered, lowered)
+
+    @staticmethod
+    def _normalize_message_entity(entity: dict[str, Any]) -> dict[str, Any]:
+        normalized = dict(entity)
+
+        if "custom_emoji_id" not in normalized:
+            custom_emoji_id = normalized.get("customEmojiId")
+            if custom_emoji_id is None:
+                custom_emoji_id = normalized.get("customEmojiID")
+            if custom_emoji_id is not None:
+                normalized["custom_emoji_id"] = custom_emoji_id
+
+        entity_type = normalized.get("type")
+        if isinstance(entity_type, str):
+            normalized["type"] = BotAdsClient._normalize_entity_type(entity_type)
+
+        return normalized
+
+    @staticmethod
+    def _normalize_entity_type(entity_type: str) -> str:
+        raw = entity_type.strip().replace("-", "_")
+        if not raw:
+            return raw
+
+        if "_" in raw:
+            normalized = raw.lower()
+        else:
+            normalized = re.sub(r"(?<!^)(?=[A-Z])", "_", raw).lower()
+
+        aliases = {
+            "customemoji": "custom_emoji",
+            "textmention": "text_mention",
+            "textlink": "text_link",
+            "expandableblockquote": "expandable_blockquote",
+        }
+        return aliases.get(normalized, normalized)
+
+    @staticmethod
+    def _normalize_reply_markup(markup: dict[str, Any]) -> dict[str, Any]:
+        normalized = dict(markup)
+
+        if "inline_keyboard" not in normalized and "inlineKeyboard" in normalized:
+            normalized["inline_keyboard"] = normalized.get("inlineKeyboard")
+
+        rows = normalized.get("inline_keyboard")
+        if isinstance(rows, list):
+            normalized_rows: list[list[dict[str, Any]]] = []
+            for row in rows:
+                if not isinstance(row, list):
+                    continue
+                normalized_row: list[dict[str, Any]] = []
+                for button in row:
+                    if not isinstance(button, dict):
+                        continue
+                    normalized_row.append(BotAdsClient._normalize_inline_button(button))
+                if normalized_row:
+                    normalized_rows.append(normalized_row)
+            normalized["inline_keyboard"] = normalized_rows
+
+        return normalized
+
+    @staticmethod
+    def _normalize_inline_button(button: dict[str, Any]) -> dict[str, Any]:
+        normalized = dict(button)
+
+        remap = {
+            "callbackData": "callback_data",
+            "webApp": "web_app",
+            "loginUrl": "login_url",
+            "switchInlineQuery": "switch_inline_query",
+            "switchInlineQueryCurrentChat": "switch_inline_query_current_chat",
+            "switchInlineQueryChosenChat": "switch_inline_query_chosen_chat",
+            "copyText": "copy_text",
+            "callbackGame": "callback_game",
+            "iconCustomEmojiId": "icon_custom_emoji_id",
+            "iconCustomEmojiID": "icon_custom_emoji_id",
+        }
+        for source_key, target_key in remap.items():
+            if target_key not in normalized and source_key in normalized:
+                normalized[target_key] = normalized[source_key]
+
+        if "style" not in normalized:
+            if "buttonStyle" in normalized:
+                normalized["style"] = normalized["buttonStyle"]
+            elif "buttonColor" in normalized:
+                normalized["style"] = normalized["buttonColor"]
+
+        return normalized
+
+    @staticmethod
+    def _convert_entity_offsets_to_utf16(
+        entity: dict[str, Any],
+        *,
+        text: str,
+    ) -> dict[str, Any]:
+        converted = dict(entity)
+        offset = converted.get("offset")
+        length = converted.get("length")
+        if not isinstance(offset, int) or not isinstance(length, int):
+            return converted
+        if offset < 0 or length < 0:
+            return converted
+
+        max_index = len(text)
+        start_cp = min(offset, max_index)
+        end_cp = min(offset + length, max_index)
+        if end_cp < start_cp:
+            end_cp = start_cp
+
+        start_utf16 = len(text[:start_cp].encode("utf-16-le")) // 2
+        end_utf16 = len(text[:end_cp].encode("utf-16-le")) // 2
+
+        converted["offset"] = start_utf16
+        converted["length"] = max(0, end_utf16 - start_utf16)
+        return converted
+
+    @staticmethod
+    def _is_entity_parse_error(exc: TelegramAPIError) -> bool:
+        text = str(exc).lower()
+        return "can't parse entities" in text or ("entity" in text and "offset" in text)
 
     @staticmethod
     def _normalize_language_code(language: str | None) -> str | None:

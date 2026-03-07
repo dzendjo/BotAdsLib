@@ -4,12 +4,12 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "botadslib"
-version = "0.2.0"
+version = "0.2.4"
 description = "Aiogram ad delivery library with media file_id cache channel support"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
-  "aiogram>=3.4.1",
+  "aiogram>=3.26.0",
   "aiohttp>=3.9.0",
 ]
 

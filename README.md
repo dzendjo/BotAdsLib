@@ -6,6 +6,7 @@ Library for showing ads in Telegram bots built on `aiogram`, integrated with Bot
 
 - fetches the next ad via `POST /api/ads/next`;
 - supports ad localization (`language`) for `action` and `broadcast`;
+- supports Telegram custom emoji entities (Bot API 9.4);
 - sends `action` ads to a single user;
 - sends `broadcast` ads to a list of users (up to 100 recipients per batch);
 - automatically submits broadcast results to `POST /api/ads/impressions/batch`;
@@ -108,6 +109,16 @@ that the bot is admin in the cache channel.
 - use only 2-letter codes (e.g. `uk`, `en`, `pl`);
 - check `ad_item.language` to see which localization API actually returned
   (`None` means base creative fallback).
+
+## Custom Emoji Support (Bot API 9.4)
+
+- entities are rendered via Bot API entities, not parse_mode;
+- `custom_emoji_id` is supported directly;
+- compatibility fallback is supported for API payloads with `customEmojiId`;
+- if entity type arrives as `customEmoji`, library normalizes it to `custom_emoji`.
+- for media captions, library retries once with UTF-16 entity offsets if Telegram rejects entity offsets.
+- for inline buttons in `creative.replyMarkup`, compatibility mapping is supported:
+  `iconCustomEmojiId -> icon_custom_emoji_id`, `buttonStyle/buttonColor -> style`.
 
 ## Recommended Broadcast Strategy for Multi-language Audiences
 

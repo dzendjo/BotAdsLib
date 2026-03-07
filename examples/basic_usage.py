@@ -19,6 +19,7 @@ async def main() -> None:
         placement="after_result",
         language="uk",
     )
+    # custom emoji from creative.entities/captionEntities are forwarded automatically.
     print(action)
 
     broadcast = await ads.send_broadcast_advert(

@@ -296,6 +296,17 @@ def _extract_planned_count(ad_item: AdItem) -> str:
     return str(value) if value is not None else "N/A"
 
 
+def _count_custom_emoji_entities(ad_item: AdItem) -> int:
+    total = 0
+    for entity in [*ad_item.creative.entities, *ad_item.creative.caption_entities]:
+        if not isinstance(entity, dict):
+            continue
+        entity_type = str(entity.get("type") or "").strip().lower().replace("_", "")
+        if entity_type == "customemoji":
+            total += 1
+    return total
+
+
 def _build_start_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
@@ -474,6 +485,7 @@ async def handle_broadcast(message: Message, bot: Bot) -> None:
         f"Campaign: {_extract_campaign_name(ad_item)}\n"
         f"Price: {_extract_campaign_price(ad_item)}\n"
         f"Planned recipients: {_extract_planned_count(ad_item)}\n"
+        f"Custom emoji entities: {_count_custom_emoji_entities(ad_item)}\n"
         f"Requested language: {request_language}\n"
         f"Applied language: {ad_item.language or 'base'}\n"
         "Press the button to continue.",

@@ -59,15 +59,24 @@ class Creative:
     @classmethod
     def from_api(cls, data: dict[str, Any]) -> "Creative":
         media_items = data.get("media") or []
+        entities = data.get("entities")
+        if entities is None:
+            entities = data.get("messageEntities")
+        caption_entities = data.get("captionEntities")
+        if caption_entities is None:
+            caption_entities = data.get("caption_entities")
+        reply_markup = data.get("replyMarkup")
+        if reply_markup is None:
+            reply_markup = data.get("reply_markup")
         return cls(
             id=str(data.get("_id") or ""),
             content_type=str(data.get("contentType") or "text"),
             text=data.get("text"),
             caption=data.get("caption"),
-            entities=list(data.get("entities") or []),
-            caption_entities=list(data.get("captionEntities") or []),
+            entities=list(entities or []),
+            caption_entities=list(caption_entities or []),
             media=[CreativeMedia.from_api(m) for m in media_items if isinstance(m, dict)],
-            reply_markup=data.get("replyMarkup"),
+            reply_markup=reply_markup,
             delivery=CreativeDelivery.from_api(data.get("delivery")),
         )
 
