@@ -10,7 +10,8 @@ Library for showing ads in Telegram bots built on `aiogram`, integrated with Bot
 - sends `action` ads to a single user;
 - sends `broadcast` ads to a list of users (up to 100 recipients per batch);
 - automatically submits broadcast results to `POST /api/ads/impressions/batch`;
-- caches media through a service channel (`cache_channel_id`) and reuses `file_id`.
+- caches media through a service channel (`cache_channel_id`) and reuses `file_id`;
+- reports the advertised bot's funnel (start → first video → premium) via `POST /api/ads/funnel`.
 
 ## Installation
 
@@ -150,7 +151,37 @@ for language, chunk in recipient_chunks:
 
 ## Click Tracking
 
-Use `track_click(campaign_id, ad_id)` to call `GET /api/ads/click`.
+Use `track_click(campaign_id, ad_id)` to call `GET /api/ads/click`. The bot can only count clicks for ads it shows (it must be among the ad's target bots).
+
+## Funnel Tracking (for the advertised bot)
+
+When your bot is the one being advertised, report the funnel so the platform can compare ads:
+**start → first video → premium**. Every ad has its own `start` value, so `/start <value>` tells which ad brought the user.
+
+```python
+from aiogram.filters import Command, CommandObject
+
+@router.message(Command("start"))
+async def start(message: Message, command: CommandObject, is_new_user: bool):
+    if command.args:
+        await ads.report_start(
+            telegram_user_id=message.from_user.id,
+            start_param=command.args,
+            is_new_user=is_new_user,  # True only if this update created the user record
+        )
+
+# after the user's first video is delivered
+await ads.report_first_video(telegram_user_id=user_id)
+
+# after the user's first premium purchase
+await ads.report_premium(telegram_user_id=user_id)
+```
+
+- Attribution is first touch: the first ad a user started from keeps them.
+- Only new users move down the funnel; a returning user's `/start` is counted separately.
+- Repeated `report_first_video` / `report_premium` calls are ignored, so calling them once per user is enough but not required.
+- The report is accepted only if the ad's creative links to this bot (`t.me/<bot>`); otherwise `BotAdsAPIError` with status 403.
+- Don't block the user on these calls: run them in the background and log `BotAdsError`.
 
 ## Echo Bot Example with `/broadcast`
 

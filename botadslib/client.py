@@ -401,6 +401,55 @@ class BotAdsClient:
             timeout_seconds=self.next_timeout_seconds,
         )
 
+    async def report_start(
+        self,
+        *,
+        telegram_user_id: int | str,
+        start_param: str,
+        is_new_user: bool,
+    ) -> dict[str, Any]:
+        """
+        Report ``/start <start_param>`` received by this bot (funnel step 1).
+
+        Call it from the ``/start`` handler whenever the command has an argument.
+        Pass ``is_new_user=True`` only when the user record was created by this
+        very update: only new users count as acquired by the ad and move down
+        the funnel. The response has ``matched`` (the value belongs to an ad that
+        links to this bot) and ``counted`` (first touch for this user).
+        """
+        return await self._report_funnel_event(
+            event="start",
+            telegram_user_id=telegram_user_id,
+            extra={"startParam": start_param, "isNewUser": bool(is_new_user)},
+        )
+
+    async def report_first_video(self, *, telegram_user_id: int | str) -> dict[str, Any]:
+        """Report the user's first delivered video (funnel step 2). Repeats are ignored."""
+        return await self._report_funnel_event(event="first_video", telegram_user_id=telegram_user_id)
+
+    async def report_premium(self, *, telegram_user_id: int | str) -> dict[str, Any]:
+        """Report the user's first premium purchase (funnel step 3). Repeats are ignored."""
+        return await self._report_funnel_event(event="premium", telegram_user_id=telegram_user_id)
+
+    async def _report_funnel_event(
+        self,
+        *,
+        event: str,
+        telegram_user_id: int | str,
+        extra: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        await self.ensure_configuration()
+        payload: dict[str, Any] = {"event": event, "telegramUserId": str(telegram_user_id)}
+        if extra:
+            payload.update(extra)
+
+        return await self._request_json(
+            method="POST",
+            path="/api/ads/funnel",
+            json_payload=payload,
+            timeout_seconds=self.next_timeout_seconds,
+        )
+
     async def get_campaigns(
         self,
         *,
