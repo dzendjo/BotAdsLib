@@ -7,6 +7,7 @@ Library for showing ads in Telegram bots built on `aiogram`, integrated with Bot
 - fetches the next ad via `POST /api/ads/next`;
 - supports ad localization (`language`) for `action` and `broadcast`;
 - supports Telegram custom emoji entities (Bot API 9.4);
+- applies the creative's link preview settings (disabled preview, banner above text);
 - sends `action` ads to a single user;
 - sends `broadcast` ads to a list of users (up to 100 recipients per batch);
 - automatically submits broadcast results to `POST /api/ads/impressions/batch`;
@@ -120,6 +121,14 @@ that the bot is admin in the cache channel.
 - for media captions, library retries once with UTF-16 entity offsets if Telegram rejects entity offsets.
 - for inline buttons in `creative.replyMarkup`, compatibility mapping is supported:
   `iconCustomEmojiId -> icon_custom_emoji_id`, `buttonStyle/buttonColor -> style`.
+
+## Link Preview
+
+- `creative.sendOptions.link_preview_options` (available as `creative.send_options`) is passed to
+  `send_message` for text ads: a disabled preview, or a custom preview URL shown large above the text;
+- fields the creative leaves unset are sent as `false`, so the bot's own `DefaultBotProperties`
+  (e.g. `link_preview_is_disabled=True`) can't change how an approved ad looks;
+- creatives without link preview settings keep the bot's defaults, as before.
 
 ## Recommended Broadcast Strategy for Multi-language Audiences
 

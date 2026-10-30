@@ -54,6 +54,7 @@ class Creative:
     caption_entities: list[dict[str, Any]] = field(default_factory=list)
     media: list[CreativeMedia] = field(default_factory=list)
     reply_markup: dict[str, Any] | None = None
+    send_options: dict[str, Any] = field(default_factory=dict)
     delivery: CreativeDelivery = field(default_factory=CreativeDelivery)
 
     @classmethod
@@ -68,6 +69,9 @@ class Creative:
         reply_markup = data.get("replyMarkup")
         if reply_markup is None:
             reply_markup = data.get("reply_markup")
+        send_options = data.get("sendOptions")
+        if send_options is None:
+            send_options = data.get("send_options")
         return cls(
             id=str(data.get("_id") or ""),
             content_type=str(data.get("contentType") or "text"),
@@ -77,6 +81,7 @@ class Creative:
             caption_entities=list(caption_entities or []),
             media=[CreativeMedia.from_api(m) for m in media_items if isinstance(m, dict)],
             reply_markup=reply_markup,
+            send_options=dict(send_options) if isinstance(send_options, dict) else {},
             delivery=CreativeDelivery.from_api(data.get("delivery")),
         )
 

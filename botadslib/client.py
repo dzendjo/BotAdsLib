@@ -9,7 +9,7 @@ from typing import Any, Iterable, Sequence
 import aiohttp
 from aiogram import Bot
 from aiogram.exceptions import TelegramAPIError
-from aiogram.types import InlineKeyboardMarkup, Message, MessageEntity
+from aiogram.types import InlineKeyboardMarkup, LinkPreviewOptions, Message, MessageEntity
 
 from .exceptions import (
     BotAdsAPIError,
@@ -657,6 +657,7 @@ class BotAdsClient:
                 entities=entities,
                 parse_mode=None,
                 reply_markup=reply_markup,
+                **self._link_preview_kwargs(creative.send_options),
             )
             return message, False
 
@@ -677,6 +678,7 @@ class BotAdsClient:
                 entities=parsed_fallback_entities,
                 parse_mode=None,
                 reply_markup=reply_markup,
+                **self._link_preview_kwargs(creative.send_options),
             )
             return fallback_message, False
 
@@ -922,6 +924,26 @@ class BotAdsClient:
             except Exception:  # noqa: BLE001
                 continue
         return parsed or None
+
+    @staticmethod
+    def _link_preview_kwargs(send_options: dict[str, Any]) -> dict[str, Any]:
+        raw_options = send_options.get("link_preview_options")
+        if not isinstance(raw_options, dict):
+            # No explicit options: keep the bot's own link preview defaults.
+            return {}
+        # Fields left unset must not fall back to the bot's DefaultBotProperties:
+        # the ad has to look exactly like the creative the advertiser approved.
+        try:
+            options = LinkPreviewOptions(
+                is_disabled=bool(raw_options.get("is_disabled")),
+                url=raw_options.get("url"),
+                prefer_small_media=bool(raw_options.get("prefer_small_media")),
+                prefer_large_media=bool(raw_options.get("prefer_large_media")),
+                show_above_text=bool(raw_options.get("show_above_text")),
+            )
+        except Exception:  # noqa: BLE001
+            return {}
+        return {"link_preview_options": options}
 
     @staticmethod
     def _parse_reply_markup(raw_reply_markup: dict[str, Any] | None) -> InlineKeyboardMarkup | None:
