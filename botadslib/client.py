@@ -3,13 +3,21 @@ from __future__ import annotations
 import asyncio
 import json
 import re
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Iterable, Sequence
+from urllib.parse import urlsplit
 
 import aiohttp
 from aiogram import Bot
-from aiogram.exceptions import TelegramAPIError
-from aiogram.types import InlineKeyboardMarkup, LinkPreviewOptions, Message, MessageEntity
+from aiogram.exceptions import TelegramAPIError, TelegramBadRequest
+from aiogram.types import (
+    BufferedInputFile,
+    InlineKeyboardMarkup,
+    InputFile,
+    LinkPreviewOptions,
+    Message,
+    MessageEntity,
+)
 
 from .exceptions import (
     BotAdsAPIError,
@@ -25,6 +33,10 @@ from .models import (
     BroadcastAdvertResult,
     CachedMediaEntry,
 )
+
+# Bot API accepts multipart uploads up to 50 MB.
+MAX_MEDIA_UPLOAD_BYTES = 50 * 1024 * 1024
+MEDIA_DOWNLOAD_TIMEOUT_SECONDS = 120
 
 
 class BotAdsClient:
@@ -754,20 +766,10 @@ class BotAdsClient:
             if cached:
                 return cached.file_id, True
 
-            try:
-                cache_message = await self._send_media(
-                    chat_id=self.cache_channel_id,
-                    media_type=media_type,
-                    media=storage_url,
-                    caption=None,
-                    caption_entities=None,
-                    reply_markup=None,
-                )
-            except TelegramAPIError as exc:
-                raise CacheChannelAccessError(
-                    "Failed to upload ad media to cache channel. Check that cache channel exists "
-                    "and bot is admin with permission to post messages."
-                ) from exc
+            cache_message = await self._upload_media_to_cache_channel(
+                media_type=media_type,
+                storage_url=storage_url,
+            )
             file_id = self._extract_file_id(cache_message, media_type)
             self._media_cache[key] = CachedMediaEntry(
                 storage_url=storage_url,
@@ -777,12 +779,76 @@ class BotAdsClient:
             self._persist_media_cache()
             return file_id, False
 
+    async def _upload_media_to_cache_channel(self, *, media_type: str, storage_url: str) -> Message:
+        """Post media to the cache channel, by URL first and then as an uploaded file.
+
+        Telegram downloads URL media on its own servers, and that download sometimes fails
+        for every URL ("failed to get HTTP URL content") or rejects the file's Content-Type.
+        Uploading the bytes ourselves does not depend on that.
+        """
+        try:
+            return await self._send_media_to_cache_channel(media_type=media_type, media=storage_url)
+        except TelegramBadRequest as url_exc:
+            url_error = url_exc
+
+        try:
+            data = await self._download_media(storage_url)
+        except BotAdsError as download_exc:
+            raise CacheChannelAccessError(
+                f"Failed to upload ad media to cache channel: Telegram could not fetch the URL "
+                f"({url_error.message}) and downloading it failed ({download_exc})."
+            ) from download_exc
+
+        upload = BufferedInputFile(data, filename=self._media_filename(storage_url, media_type))
+        try:
+            return await self._send_media_to_cache_channel(media_type=media_type, media=upload)
+        except TelegramAPIError as exc:
+            raise CacheChannelAccessError(
+                f"Failed to upload ad media to cache channel ({exc.message}). Check that cache "
+                "channel exists and bot is admin with permission to post messages."
+            ) from exc
+
+    async def _send_media_to_cache_channel(self, *, media_type: str, media: str | InputFile) -> Message:
+        return await self._send_media(
+            chat_id=self.cache_channel_id,
+            media_type=media_type,
+            media=media,
+            caption=None,
+            caption_entities=None,
+            reply_markup=None,
+        )
+
+    async def _download_media(self, url: str) -> bytes:
+        await self._ensure_session()
+        assert self._session is not None
+
+        timeout = aiohttp.ClientTimeout(total=MEDIA_DOWNLOAD_TIMEOUT_SECONDS)
+        try:
+            async with self._session.get(url, timeout=timeout) as response:
+                if response.status != 200:
+                    raise BotAdsNetworkError(f"HTTP {response.status}")
+                if response.content_length and response.content_length > MAX_MEDIA_UPLOAD_BYTES:
+                    raise BotAdsError(f"file is {response.content_length} bytes, over the upload limit")
+                data = bytearray()
+                async for chunk in response.content.iter_chunked(64 * 1024):
+                    data.extend(chunk)
+                    if len(data) > MAX_MEDIA_UPLOAD_BYTES:
+                        raise BotAdsError("file is over the upload limit")
+                return bytes(data)
+        except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
+            raise BotAdsNetworkError(str(exc) or type(exc).__name__) from exc
+
+    @staticmethod
+    def _media_filename(storage_url: str, media_type: str) -> str:
+        name = PurePosixPath(urlsplit(storage_url).path).name
+        return name or f"{media_type}.bin"
+
     async def _send_media(
         self,
         *,
         chat_id: int | str,
         media_type: str,
-        media: str,
+        media: str | InputFile,
         caption: str | None,
         caption_entities: list[MessageEntity] | None,
         reply_markup: InlineKeyboardMarkup | None,

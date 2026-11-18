@@ -89,8 +89,10 @@ Configuration validation:
 - checks that `cache_channel_id` is an accessible channel;
 - checks that the bot is channel admin and can post messages.
 
-If media upload to cache channel fails, the library raises a clear message to check
-that the bot is admin in the cache channel.
+Media is posted to the cache channel by its storage URL. If Telegram cannot fetch that URL
+(for example "failed to get HTTP URL content"), the library downloads the file itself and
+uploads it (up to 50 MB). If that also fails, it raises `CacheChannelAccessError` with
+Telegram's own error text.
 
 ## How `send_broadcast_advert` Works
 
